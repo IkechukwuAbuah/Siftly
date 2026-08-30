@@ -247,7 +247,9 @@ export async function categorizeBatch(
   // Prefer CLI over SDK (avoids OAuth token extraction, uses CLI directly)
   if (provider === 'openai') {
     if (await getCodexCliAvailability()) {
-      const result = await codexPrompt(prompt, { timeoutMs: 60_000 })
+      // A real 25-bookmark prompt measured ~44s through codex exec; 60s left no
+      // headroom once several pipeline workers run concurrently.
+      const result = await codexPrompt(prompt, { timeoutMs: 120_000 })
       if (result.success && result.data) {
         try {
           return parseCategorizationResponse(result.data, new Set(allSlugs))

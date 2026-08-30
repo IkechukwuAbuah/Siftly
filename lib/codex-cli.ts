@@ -1,11 +1,9 @@
 import { execFile, spawn } from 'child_process'
-import { promisify } from 'util'
 import { readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 
-const execFileAsync = promisify(execFile)
 
 export interface CodexCliOptions {
   model?: string
@@ -30,6 +28,33 @@ export async function isCodexCliAvailable(): Promise<boolean> {
   })
 }
 
+/**
+ * Run `codex` and capture its output.
+ *
+ * `codex exec` reads extra prompt input from stdin whenever stdin is not a TTY.
+ * execFile hands the child an open stdin pipe that nothing ever writes to or
+ * closes, so codex waited on it forever, never started a session, and was
+ * killed at the timeout — producing an empty result. Closing stdin immediately
+ * gives codex the EOF it is waiting for.
+ */
+function runCodexExec(
+  args: string[],
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      'codex',
+      args,
+      { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (err) reject(err)
+        else resolve({ stdout, stderr })
+      },
+    )
+    child.stdin?.end()
+  })
+}
+
 export async function codexPrompt(
   prompt: string,
   options: CodexCliOptions = {}
@@ -44,12 +69,7 @@ export async function codexPrompt(
   args.push(prompt)
 
   try {
-    await execFileAsync('codex', args, {
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-      windowsHide: true,
-    })
+    const { stderr } = await runCodexExec(args, timeoutMs)
 
     // Read the captured output
     try {
@@ -58,7 +78,13 @@ export async function codexPrompt(
       return { success: true, data: output }
     } catch {
       try { unlinkSync(outFile) } catch { /* ignore */ }
-      return { success: false, error: 'Codex exec completed but no output file found' }
+      // codex exited cleanly but produced no final message. Its stderr is the
+      // only clue as to why, so surface a tail of it instead of discarding it.
+      const detail = (stderr || '').trim().slice(-500)
+      return {
+        success: false,
+        error: `Codex exec completed but no output file found${detail ? ` — codex stderr: ${detail}` : ' (codex produced no stderr)'}`,
+      }
     }
   } catch (err) {
     // If the process ran but output was written before the error, try reading it
