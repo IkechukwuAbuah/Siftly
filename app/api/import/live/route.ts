@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (syncInterval !== undefined) {
-    const valid = ['off', '1h', '4h', '8h', '24h']
+    const valid = ['off', '1h', '4h', '8h', '24h', '48h']
     if (!valid.includes(syncInterval)) {
       return NextResponse.json({ error: `Invalid interval. Use: ${valid.join(', ')}` }, { status: 400 })
     }

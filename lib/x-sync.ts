@@ -59,13 +59,14 @@ export async function syncBookmarks(
 
 // ── Scheduler ───────────────────────────────────────────────────────────────────
 
-type SyncInterval = '1h' | '4h' | '8h' | '24h'
+type SyncInterval = '1h' | '4h' | '8h' | '24h' | '48h'
 
 const INTERVAL_MS: Record<SyncInterval, number> = {
   '1h': 60 * 60 * 1000,
   '4h': 4 * 60 * 60 * 1000,
   '8h': 8 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
+  '48h': 48 * 60 * 60 * 1000,
 }
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null

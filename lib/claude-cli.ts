@@ -1,7 +1,32 @@
 import { execFile, spawn } from 'child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
+let _resolvedClaudeBin: string | null = null
+
+function resolveClaudeExecutable(): string {
+  if (_resolvedClaudeBin) return _resolvedClaudeBin
+
+  const candidates = [
+    process.env.CLAUDE_BIN,
+    '/Users/x/.local/bin/claude',
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ].filter((value): value is string => Boolean(value))
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      _resolvedClaudeBin = candidate
+      return candidate
+    }
+  }
+
+  _resolvedClaudeBin = 'claude'
+  return _resolvedClaudeBin
+}
 
 export type CliModelAlias = 'haiku' | 'sonnet' | 'opus'
 
@@ -33,7 +58,7 @@ export interface ClaudeCliResult<T = unknown> {
  */
 export async function isCliAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
-    const proc = spawn('claude', ['auth', 'status'], {
+    const proc = spawn(resolveClaudeExecutable(), ['auth', 'status'], {
       stdio: 'ignore',
       windowsHide: true,
     })
@@ -64,17 +89,28 @@ export async function claudePrompt(
   options: ClaudeCliOptions = {}
 ): Promise<ClaudeCliResult<string>> {
   const { model, maxTurns = 1, timeoutMs = 120_000 } = options
+  const claudeBin = resolveClaudeExecutable()
+  const promptDir = mkdtempSync(join(tmpdir(), 'siftly-claude-'))
+  const promptFile = join(promptDir, 'prompt.txt')
+  writeFileSync(promptFile, prompt, 'utf8')
 
-  const args = ['-p', '--output-format', 'json', '--max-turns', String(maxTurns)]
-  if (model) args.push('--model', model)
-  args.push(prompt)
+  const command = model
+    ? 'exec "$CLAUDE_BIN" -p --output-format json --max-turns "$CLAUDE_MAX_TURNS" --model "$CLAUDE_MODEL" "$(cat "$CLAUDE_PROMPT_FILE")"'
+    : 'exec "$CLAUDE_BIN" -p --output-format json --max-turns "$CLAUDE_MAX_TURNS" "$(cat "$CLAUDE_PROMPT_FILE")"'
 
   try {
-    const { stdout } = await execFileAsync('claude', args, {
+    const { stdout } = await execFileAsync('/bin/bash', ['-lc', command], {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024, // 10MB
       windowsHide: true,
+      env: {
+        ...process.env,
+        CLAUDE_BIN: claudeBin,
+        CLAUDE_MAX_TURNS: String(maxTurns),
+        CLAUDE_MODEL: model ?? '',
+        CLAUDE_PROMPT_FILE: promptFile,
+      },
     })
 
     // Parse the JSON output from CLI
@@ -84,7 +120,16 @@ export async function claudePrompt(
     return { success: true, data: text, rawOutput: stdout }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return { success: false, error: msg }
+    const stderr =
+      typeof err === 'object' &&
+      err !== null &&
+      'stderr' in err &&
+      typeof (err as { stderr?: unknown }).stderr === 'string'
+        ? (err as { stderr: string }).stderr.trim()
+        : ''
+    return { success: false, error: stderr ? `${msg}\n${stderr}` : msg }
+  } finally {
+    rmSync(promptDir, { recursive: true, force: true })
   }
 }
 
