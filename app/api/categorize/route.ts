@@ -31,6 +31,7 @@ interface CategorizationState {
     enriched: number
     categorized: number
   }
+  failed: number
   lastError: string | null
   error: string | null
 }
@@ -48,6 +49,7 @@ if (!globalState.categorizationState) {
     done: 0,
     total: 0,
     stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 },
+    failed: 0,
     lastError: null,
     error: null,
   }
@@ -76,6 +78,7 @@ export async function GET(): Promise<NextResponse> {
     done: state.done,
     total: state.total,
     stageCounts: state.stageCounts,
+    failed: state.failed,
     lastError: state.lastError,
     error: state.error,
   })
@@ -93,6 +96,10 @@ export async function DELETE(): Promise<NextResponse> {
 
 const PIPELINE_WORKERS = 5
 const CAT_BATCH_SIZE = 25
+// If this many categorization batches fail back-to-back without a single success,
+// the AI provider is misconfigured — abort instead of marking every bookmark "done"
+// while tagging nothing.
+const MAX_CONSECUTIVE_CAT_FAILURES = 3
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (getState().status === 'running' || getState().status === 'stopping') {
@@ -140,6 +147,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     done: 0,
     total,
     stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 },
+    failed: 0,
     lastError: null,
     error: null,
   })
@@ -151,6 +159,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   void (async () => {
     const counts = { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 }
+    let failedCount = 0
+    let firstError: string | null = null
+    let firstCategorizeError: string | null = null
+    let autoAborted = false
+
+    // Per-item API failures used to be logged and dropped, so a run with a dead
+    // API key reported "done" for every bookmark with all stage counts at zero.
+    // Record them on the state object so the failure is visible to callers.
+    function recordFailure(stage: string, err: unknown): void {
+      failedCount++
+      // Generous cap: provider errors are verbose and the most diagnostic part
+      // (e.g. the CLI-attempt reason) is appended last.
+      const message = `[${stage}] ${err instanceof Error ? err.message : String(err)}`.slice(0, 800)
+      if (firstError === null) firstError = message
+      if (stage === 'categorize' && firstCategorizeError === null) firstCategorizeError = message
+      setState({ failed: failedCount, lastError: firstError })
+    }
 
     try {
       let client: AIClient | null = null
@@ -215,6 +240,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           // Shared categorization queue (JS single-threaded: splice is atomic vs async)
           const catPending: string[] = []
           let catFlushing = false
+          let consecutiveCatFailures = 0
 
           async function drainCategorizeQueue(final = false): Promise<void> {
             if (final) {
@@ -229,6 +255,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             catFlushing = true
             try {
               while (catPending.length > 0) {
+                if (autoAborted) break
                 if (!final && catPending.length < CAT_BATCH_SIZE) break
                 const ids = catPending.splice(0, CAT_BATCH_SIZE)
                 if (ids.length === 0) break
@@ -241,9 +268,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                   const results = await categorizeBatch(batch, client, categoryDescriptions, allSlugs)
                   await writeCategoryResults(results)
                   counts.categorized += ids.length
+                  consecutiveCatFailures = 0
                   setState({ stageCounts: { ...counts } })
                 } catch (catErr) {
                   console.error('[parallel] categorize batch error:', catErr)
+                  recordFailure('categorize', catErr)
+                  consecutiveCatFailures++
+                  if (
+                    counts.categorized === 0 &&
+                    consecutiveCatFailures >= MAX_CONSECUTIVE_CAT_FAILURES
+                  ) {
+                    autoAborted = true
+                    globalState.categorizationAbort = true
+                    setState({ status: 'stopping' })
+                    break
+                  }
                 }
               }
             } finally {
@@ -277,16 +316,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               if (shouldAbort()) return
               if (media.imageTags !== null) continue
               try {
-                await analyzeItem(
+                // analyzeItem returns 0 when analysis produced no tags; counting that
+                // as "tagged" used to inflate visionTagged on a failing provider.
+                const tagged = await analyzeItem(
                   { id: media.id, url: media.url, thumbnailUrl: media.thumbnailUrl, type: media.type },
                   client,
                   model,
                 )
-                anyVisionRan = true
-                counts.visionTagged++
-                setState({ stageCounts: { ...counts } })
+                if (tagged > 0) {
+                  anyVisionRan = true
+                  counts.visionTagged++
+                  setState({ stageCounts: { ...counts } })
+                } else {
+                  recordFailure('vision', new Error(`no tags produced for media ${media.id}`))
+                }
               } catch (err) {
                 console.warn('[parallel] vision failed for', media.id, err instanceof Error ? err.message : err)
+                recordFailure('vision', err)
               }
             }
 
@@ -339,6 +385,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                   }
                 } catch (err) {
                   console.warn('[parallel] enrichment failed for', bm.id, err instanceof Error ? err.message : err)
+                  recordFailure('enrichment', err)
                 }
               }
             }
@@ -367,16 +414,44 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!shouldAbort()) {
       await rebuildFts().catch((err) => console.error('FTS rebuild error:', err))
     }
+
+    return {
+      failed: failedCount,
+      firstError,
+      firstCategorizeError,
+      autoAborted,
+      categorized: counts.categorized,
+    }
   })()
-    .then(() => {
+    .then((summary) => {
       const wasStopped = globalState.categorizationAbort
       globalState.categorizationAbort = false
+      const finalState = getState()
+
+      let error: string | null = null
+      if (summary.autoAborted) {
+        error =
+          `Aborted after ${MAX_CONSECUTIVE_CAT_FAILURES} consecutive categorization failures ` +
+          `with nothing categorized. First categorization error: ` +
+          `${summary.firstCategorizeError ?? summary.firstError ?? 'unknown'}`
+      } else if (wasStopped) {
+        error = 'Stopped by user'
+      } else if (summary.failed > 0) {
+        error =
+          `Completed with ${summary.failed} failed item(s). ` +
+          `First error: ${summary.firstError ?? 'unknown'}`
+      }
+
       setState({
         status: 'idle',
         stage: null,
-        done: wasStopped ? getState().done : total,
-        total,
-        error: wasStopped ? 'Stopped by user' : null,
+        // Report what was actually processed. Forcing done = total here used to make a
+        // run that categorized nothing look like a clean, complete pass.
+        done: finalState.done,
+        total: finalState.total,
+        failed: summary.failed,
+        lastError: summary.firstError,
+        error,
       })
     })
     .catch((err) => {

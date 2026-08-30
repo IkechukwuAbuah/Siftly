@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Loader2, CheckCircle, ChevronRight, Eye, Tag, Brain, Layers, StopCircle } from 'lucide-react'
+import { Sparkles, Loader2, CheckCircle, AlertTriangle, ChevronRight, Eye, Tag, Brain, Layers, StopCircle } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
 
 type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
@@ -20,6 +20,7 @@ interface CategorizeStatus {
   status: 'idle' | 'running' | 'stopping'
   stage: Stage
   stageCounts: StageCounts
+  failed: number
   lastError: string | null
   error: string | null
 }
@@ -57,6 +58,7 @@ export default function CategorizePage() {
   const [running, setRunning] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [done, setDone] = useState(false)
+  const hadFailures = (status?.failed ?? 0) > 0 || Boolean(status?.error)
   const [error, setError] = useState('')
 
   // On mount, check if pipeline is already running on the server
@@ -255,16 +257,27 @@ export default function CategorizePage() {
 
         {done && (
           <div className="flex flex-col items-center gap-5 py-4 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
-              <CheckCircle size={32} className="text-emerald-400" />
+            <div
+              className={`w-14 h-14 rounded-2xl flex items-center justify-center ${
+                hadFailures ? 'bg-amber-500/10' : 'bg-emerald-500/10'
+              }`}
+            >
+              {hadFailures ? (
+                <AlertTriangle size={32} className="text-amber-400" />
+              ) : (
+                <CheckCircle size={32} className="text-emerald-400" />
+              )}
             </div>
             <div>
-              <p className="text-xl font-bold text-zinc-100">Pipeline Complete!</p>
+              <p className="text-xl font-bold text-zinc-100">
+                {hadFailures ? 'Pipeline Finished With Errors' : 'Pipeline Complete!'}
+              </p>
               {status?.stageCounts && (
                 <p className="text-zinc-500 text-sm mt-1">
                   {status.stageCounts.visionTagged} images analyzed ·{' '}
                   {status.stageCounts.enriched} bookmarks enriched ·{' '}
                   {status.stageCounts.categorized} categorized
+                  {hadFailures ? ` · ${status?.failed} failed` : ''}
                 </p>
               )}
             </div>

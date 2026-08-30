@@ -240,6 +240,9 @@ export async function categorizeBatch(
 
   const prompt = buildCategorizationPrompt(bookmarks, categoryDescriptions, allSlugs)
   const provider = await getProvider()
+  // Why the CLI attempt gave up, so a thrown SDK error can explain the whole path
+  // instead of only the last hop.
+  let cliFailure: string | null = null
 
   // Prefer CLI over SDK (avoids OAuth token extraction, uses CLI directly)
   if (provider === 'openai') {
@@ -249,9 +252,11 @@ export async function categorizeBatch(
         try {
           return parseCategorizationResponse(result.data, new Set(allSlugs))
         } catch (parseErr) {
+          cliFailure = `Codex CLI response parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
           console.warn('[categorize] Codex CLI response parse failed, falling back to SDK:', parseErr)
         }
       } else {
+        cliFailure = `Codex CLI failed: ${result.error ?? 'unknown error'}`
         console.warn('[categorize] Codex CLI failed, falling back to SDK:', result.error)
       }
     }
@@ -265,27 +270,36 @@ export async function categorizeBatch(
         try {
           return parseCategorizationResponse(result.data, new Set(allSlugs))
         } catch (parseErr) {
+          cliFailure = `Claude CLI response parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
           console.warn('[categorize] CLI response parse failed, falling back to SDK:', parseErr)
         }
       } else {
+        cliFailure = `Claude CLI failed: ${result.error ?? 'unknown error'}`
         console.warn('[categorize] CLI failed, falling back to SDK:', result.error)
       }
     }
   }
 
   // Fallback to SDK (requires API key)
+  const cliSuffix = cliFailure ? ` (CLI attempt: ${cliFailure})` : ''
   if (!client) {
-    throw new Error('No CLI available and no API key configured.')
+    throw new Error(`No CLI available and no API key configured.${cliSuffix}`)
   }
 
   const model = await getActiveModel()
-  const response = await client.createMessage({
-    model,
-    max_tokens: 2048,
-    messages: [{ role: 'user', content: prompt }],
-  })
+  let response
+  try {
+    response = await client.createMessage({
+      model,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }],
+    })
+  } catch (sdkErr) {
+    const msg = sdkErr instanceof Error ? sdkErr.message : String(sdkErr)
+    throw new Error(`${provider} SDK request failed (model ${model}): ${msg}${cliSuffix}`)
+  }
 
-  if (!response.text) throw new Error('No text content in AI response')
+  if (!response.text) throw new Error(`No text content in AI response${cliSuffix}`)
 
   return parseCategorizationResponse(response.text, new Set(allSlugs))
 }

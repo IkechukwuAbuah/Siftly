@@ -420,11 +420,14 @@ export async function enrichBatchSemanticTags(
   // Fallback to SDK
   if (!client) {
     console.warn('[enrich] CLI not available and no API client')
-    return []
+    throw new Error('Enrichment unavailable: no CLI and no API client configured')
   }
 
   const model = await getActiveModel()
   const ENRICH_RETRY_DELAYS = [2000, 5000]
+  // Distinguishes "the API call failed" from "the model replied with nothing usable".
+  // Returning [] for both used to make a dead API key look like an empty result.
+  let lastRequestError: string | null = null
 
   for (let attempt = 0; attempt <= ENRICH_RETRY_DELAYS.length; attempt++) {
     try {
@@ -435,14 +438,21 @@ export async function enrichBatchSemanticTags(
       })
       const results = parseResponse(response.text)
       if (results.length > 0) return results
+      lastRequestError = null
       console.warn(`[enrich] no JSON array in response (attempt ${attempt + 1})`)
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
+      lastRequestError = errMsg
       console.warn(`[enrich] batch failed (attempt ${attempt + 1}): ${errMsg.slice(0, 120)}`)
       const isClientError = errMsg.includes('400') || errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('422')
       if (isClientError || attempt >= ENRICH_RETRY_DELAYS.length) break
       await new Promise((r) => setTimeout(r, ENRICH_RETRY_DELAYS[attempt]))
     }
+  }
+
+  // Every request errored — surface it rather than reporting an empty result.
+  if (lastRequestError !== null) {
+    throw new Error(`Enrichment request failed (model ${model}): ${lastRequestError}`)
   }
   return []
 }
@@ -521,7 +531,13 @@ export async function enrichAllBookmarks(
     const batchTasks = batches.map((batch) => async () => {
       if (shouldAbort?.()) return
 
-      const results = await enrichBatchSemanticTags(batch, client)
+      let results: EnrichmentResult[]
+      try {
+        results = await enrichBatchSemanticTags(batch, client)
+      } catch (err) {
+        console.warn('[enrich] batch skipped:', err instanceof Error ? err.message : err)
+        return
+      }
       const resultMap = new Map(results.map((r) => [r.id, r]))
 
       for (const b of batch) {
