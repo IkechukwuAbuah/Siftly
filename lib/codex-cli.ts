@@ -64,7 +64,11 @@ export async function codexPrompt(
   // Write output to a temp file so we can capture the model's final message cleanly
   const outFile = join(tmpdir(), `codex-out-${randomUUID()}.txt`)
 
-  const args = ['exec', '--output-last-message', outFile]
+  // --ignore-user-config skips the user's ~/.codex/config.toml (skills, hooks, MCP
+  // servers). None of it is relevant to a self-contained prompt-to-JSON call, and
+  // loading it measured 46s vs 16s for the same prompt. Auth still resolves from
+  // CODEX_HOME, so the ChatGPT subscription is unaffected.
+  const args = ['exec', '--ignore-user-config', '--output-last-message', outFile]
   if (model) args.push('--model', model)
   args.push(prompt)
 

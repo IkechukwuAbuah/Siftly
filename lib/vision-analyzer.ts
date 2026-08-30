@@ -398,7 +398,9 @@ export async function enrichBatchSemanticTags(
   // Prefer CLI over SDK
   if (provider === 'openai') {
     if (await getCodexCliAvailability()) {
-      const result = await codexPrompt(prompt, { timeoutMs: 90_000 })
+      // Batching raised the per-call cost: a 5-bookmark enrichment prompt exceeds
+      // 90s through codex exec, which silently fell back to the SDK on every batch.
+      const result = await codexPrompt(prompt, { timeoutMs: 240_000 })
       if (result.success && result.data) {
         try { return parseResponse(result.data) }
         catch { console.warn('[enrich] Codex CLI response parse failed, falling back to SDK') }

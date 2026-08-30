@@ -97,10 +97,10 @@ export async function DELETE(): Promise<NextResponse> {
 
 const PIPELINE_WORKERS = 5
 const CAT_BATCH_SIZE = 25
-// If this many categorization batches fail back-to-back without a single success,
+// If this many enrichment or categorization batches fail without a single success,
 // the AI provider is misconfigured — abort instead of marking every bookmark "done"
 // while tagging nothing.
-const MAX_CONSECUTIVE_CAT_FAILURES = 3
+const MAX_CONSECUTIVE_BATCH_FAILURES = 3
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (getState().status === 'running' || getState().status === 'stopping') {
@@ -164,6 +164,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let firstError: string | null = null
     let firstCategorizeError: string | null = null
     let autoAborted = false
+    let autoAbortReason: string | null = null
+
+    function triggerAutoAbort(reason: string): void {
+      autoAborted = true
+      autoAbortReason = reason
+      globalState.categorizationAbort = true
+      setState({ status: 'stopping' })
+    }
 
     // Per-item API failures used to be logged and dropped, so a run with a dead
     // API key reported "done" for every bookmark with all stage counts at zero.
@@ -242,6 +250,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           const catPending: string[] = []
           let catFlushing = false
           let consecutiveCatFailures = 0
+          let enrichBatchFailures = 0
 
           async function drainCategorizeQueue(final = false): Promise<void> {
             if (final) {
@@ -277,11 +286,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                   consecutiveCatFailures++
                   if (
                     counts.categorized === 0 &&
-                    consecutiveCatFailures >= MAX_CONSECUTIVE_CAT_FAILURES
+                    consecutiveCatFailures >= MAX_CONSECUTIVE_BATCH_FAILURES
                   ) {
-                    autoAborted = true
-                    globalState.categorizationAbort = true
-                    setState({ status: 'stopping' })
+                    triggerAutoAbort(
+                      `${consecutiveCatFailures} consecutive categorization batches failed with ` +
+                        `nothing categorized. First categorization error: ` +
+                        `${firstCategorizeError ?? firstError ?? 'unknown'}`,
+                    )
                     break
                   }
                 }
@@ -429,10 +440,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                 } catch (err) {
                   console.warn('[parallel] enrichment failed for batch:', err instanceof Error ? err.message : err)
                   recordFailure('enrichment', err, batch.length)
+                  enrichBatchFailures++
                 }
               }),
               PIPELINE_WORKERS,
             )
+
+            // Checked after the wave rather than inside it: enrichment batches run
+            // concurrently, so "consecutive" is only meaningful between waves.
+            if (counts.enriched === 0 && enrichBatchFailures >= MAX_CONSECUTIVE_BATCH_FAILURES) {
+              triggerAutoAbort(
+                `${enrichBatchFailures} enrichment batches failed with nothing enriched. ` +
+                  `First error: ${firstError ?? 'unknown'}`,
+              )
+              return
+            }
             if (shouldAbort()) return
 
             // Stage D: hand the chunk to the categorization queue
@@ -464,8 +486,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return {
       failed: failedCount,
       firstError,
-      firstCategorizeError,
       autoAborted,
+      autoAbortReason,
       categorized: counts.categorized,
     }
   })()
@@ -476,10 +498,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       let error: string | null = null
       if (summary.autoAborted) {
-        error =
-          `Aborted after ${MAX_CONSECUTIVE_CAT_FAILURES} consecutive categorization failures ` +
-          `with nothing categorized. First categorization error: ` +
-          `${summary.firstCategorizeError ?? summary.firstError ?? 'unknown'}`
+        error = `Aborted: ${summary.autoAbortReason ?? 'repeated batch failures'}`
       } else if (wasStopped) {
         error = 'Stopped by user'
       } else if (summary.failed > 0) {
