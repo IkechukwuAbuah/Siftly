@@ -315,7 +315,7 @@ export async function analyzeAllUntagged(
 
 // ── Batch semantic enrichment ──────────────────────────────────────────────────
 
-const ENRICH_BATCH_SIZE = 5
+export const ENRICH_BATCH_SIZE = 5
 const ENRICH_CONCURRENCY = 2
 
 export interface BookmarkForEnrichment {
