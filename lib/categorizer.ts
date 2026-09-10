@@ -2,7 +2,7 @@ import prisma from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
 import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
-import { getActiveModel, getProvider } from '@/lib/settings'
+import { getActiveModel, getCodexModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 
 const BATCH_SIZE = 20
@@ -249,7 +249,7 @@ export async function categorizeBatch(
     if (await getCodexCliAvailability()) {
       // A real 25-bookmark prompt measured ~44s through codex exec; 60s left no
       // headroom once several pipeline workers run concurrently.
-      const result = await codexPrompt(prompt, { timeoutMs: 120_000 })
+      const result = await codexPrompt(prompt, { model: await getCodexModel(), timeoutMs: 120_000 })
       if (result.success && result.data) {
         try {
           return parseCategorizationResponse(result.data, new Set(allSlugs))

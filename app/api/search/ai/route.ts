@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { ftsSearch } from '@/lib/fts'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
-import { getActiveModel, getProvider } from '@/lib/settings'
+import { getActiveModel, getCodexModel, getProvider } from '@/lib/settings'
 import { extractKeywords } from '@/lib/search-utils'
 import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
 import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
@@ -354,7 +354,7 @@ Constraints:
   let cliSucceeded = false
   if (provider === 'openai' && await getCodexCliAvailability()) {
     try {
-      const result = await codexPrompt(prompt, { timeoutMs: 90_000 })
+      const result = await codexPrompt(prompt, { model: await getCodexModel(), timeoutMs: 90_000 })
       if (result.success && result.data) {
         aiResponse = parseSearchResponse(result.data)
         cliSucceeded = true

@@ -34,7 +34,9 @@ const ANTHROPIC_MODELS = [
 ]
 
 const OPENAI_MODELS = [
-  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Fast & Cheap' },
+  { value: 'gpt-5.6-luna', label: 'Luna (5.6)', description: 'Fast & affordable — ChatGPT sign-in' },
+  { value: 'gpt-5.6-sol', label: 'Sol (5.6)', description: 'Reliable workhorse — ChatGPT sign-in' },
+  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Fast & Cheap (API key only)' },
   { value: 'gpt-4.1', label: 'GPT-4.1', description: 'Most Capable' },
   { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', description: 'Fastest' },
   { value: 'o4-mini', label: 'o4-mini', description: 'Reasoning (mini)' },
@@ -656,7 +658,7 @@ function ApiKeySection({ onToast }: { onToast: (t: Toast) => void }) {
               <ModelSelector
                 models={OPENAI_MODELS}
                 settingKey="openaiModel"
-                defaultValue="gpt-4.1-mini"
+                defaultValue="gpt-5.6-luna"
                 onToast={onToast}
               />
               <p className="text-xs text-zinc-500 mt-1.5">Applies to all AI operations — API key <strong className="text-zinc-400 font-medium">and Codex CLI</strong></p>

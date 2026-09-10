@@ -13,6 +13,12 @@ let _openAIModelCacheExpiry = 0
 let _cachedMiniMaxModel: string | null = null
 let _miniMaxModelCacheExpiry = 0
 
+// Cached separately from _cachedOpenAIModel: this one must preserve the
+// difference between "set" and "unset", which the defaulted accessor erases.
+let _cachedCodexModel: string | null = null
+let _codexModelCacheExpiry = 0
+let _codexModelCached = false
+
 const CACHE_TTL = 5 * 60 * 1000
 
 /**
@@ -50,6 +56,30 @@ export async function getOpenAIModel(): Promise<string> {
 }
 
 /**
+ * Model slug for the Codex CLI (`codex exec --model`), read from the same
+ * `openaiModel` setting the Settings screen already exposes.
+ *
+ * Returns undefined when the row is unset or blank so codexPrompt omits --model
+ * and the CLI picks its own default — passing an id the CLI rejects would fail
+ * the whole call, which is worse than not steering it.
+ *
+ * NOTE: Codex slugs (gpt-5.6-luna, gpt-5.6-sol) are a different namespace from
+ * the OpenAI API model names getOpenAIModel() hands the SDK. One row feeds both
+ * because the UI exposes one box; under `auth_mode: chatgpt` the SDK path is a
+ * hard error anyway (openai-auth.ts:67), so only the CLI value is live today.
+ */
+export async function getCodexModel(): Promise<string | undefined> {
+  if (_codexModelCached && Date.now() < _codexModelCacheExpiry) {
+    return _cachedCodexModel ?? undefined
+  }
+  const setting = await prisma.setting.findUnique({ where: { key: 'openaiModel' } })
+  _cachedCodexModel = setting?.value?.trim() || null
+  _codexModelCacheExpiry = Date.now() + CACHE_TTL
+  _codexModelCached = true
+  return _cachedCodexModel ?? undefined
+}
+
+/**
  * Get the configured MiniMax model from settings (cached for 5 minutes).
  */
 export async function getMiniMaxModel(): Promise<string> {
@@ -81,4 +111,7 @@ export function invalidateSettingsCache(): void {
   _openAIModelCacheExpiry = 0
   _cachedMiniMaxModel = null
   _miniMaxModelCacheExpiry = 0
+  _cachedCodexModel = null
+  _codexModelCacheExpiry = 0
+  _codexModelCached = false
 }

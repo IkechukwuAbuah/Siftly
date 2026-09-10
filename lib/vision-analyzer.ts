@@ -2,7 +2,7 @@ import prisma from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
 import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
-import { getActiveModel, getProvider } from '@/lib/settings'
+import { getActiveModel, getCodexModel, getProvider } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
 
 export { getActiveModel } from '@/lib/settings'
@@ -83,7 +83,7 @@ async function analyzeImageViaCli(imageUrl: string): Promise<string> {
 
   if (provider === 'openai') {
     if (!(await getCodexCliAvailability())) return ''
-    const result = await codexPrompt(urlPrompt, { timeoutMs: 60_000 })
+    const result = await codexPrompt(urlPrompt, { model: await getCodexModel(), timeoutMs: 60_000 })
     if (!result.success || !result.data) return ''
     const jsonMatch = result.data.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return ''
@@ -400,7 +400,7 @@ export async function enrichBatchSemanticTags(
     if (await getCodexCliAvailability()) {
       // Batching raised the per-call cost: a 5-bookmark enrichment prompt exceeds
       // 90s through codex exec, which silently fell back to the SDK on every batch.
-      const result = await codexPrompt(prompt, { timeoutMs: 240_000 })
+      const result = await codexPrompt(prompt, { model: await getCodexModel(), timeoutMs: 240_000 })
       if (result.success && result.data) {
         try { return parseResponse(result.data) }
         catch { console.warn('[enrich] Codex CLI response parse failed, falling back to SDK') }

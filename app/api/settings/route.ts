@@ -16,6 +16,12 @@ const ALLOWED_ANTHROPIC_MODELS = [
 ] as const
 
 const ALLOWED_OPENAI_MODELS = [
+  // Codex CLI slugs — the live lane under a ChatGPT sign-in, where the model is
+  // passed to `codex exec --model`. The gpt-4.1/o-series names below are OpenAI
+  // API names, valid only on the SDK fallback (api_key auth); selecting one
+  // while signed in with ChatGPT makes the CLI reject the call.
+  'gpt-5.6-luna',
+  'gpt-5.6-sol',
   'gpt-4.1-mini',
   'gpt-4.1',
   'gpt-4.1-nano',

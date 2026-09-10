@@ -1,5 +1,5 @@
 import prisma from '@/lib/db'
-import { getActiveModel, getProvider } from '@/lib/settings'
+import { getActiveModel, getCodexModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
 import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
@@ -135,7 +135,7 @@ async function suggestCategoriesViaCLI(bookmarks: BookmarkSample[]): Promise<Cat
 
   if (provider === 'openai') {
     if (await getCodexCliAvailability()) {
-      const result = await codexPrompt(prompt, { timeoutMs: 120_000 })
+      const result = await codexPrompt(prompt, { model: await getCodexModel(), timeoutMs: 120_000 })
       if (!result.success || !result.data) {
         throw new Error('CLI categorization failed: ' + (result.error || 'No result'))
       }
